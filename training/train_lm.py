@@ -8,9 +8,33 @@ import os
 import pickle
 import numpy as np
 import utils
+import query
+
+## callback wrappers
+class SentenceGeneratorCB(callbacks.Callback):
+	def __init__(self, word2id, id2word=None, tbptt_step=None):
+		self.word2id = word2id
+		self.id2word = id2word
+		self.tbptt_step = tbptt_step
+
+	def on_train_begin(self, logs=None):
+		self.sentence_generator = query.SentenceGenerator(self.model, self.word2id, id2word=self.id2word, tbptt_step=self.tbptt_step)
+
+	def on_epoch_end(self, epoch, logs=None):
+		print('\nSampling sentences...')
+		for i in range(5):
+			sentence, prob = self.sentence_generator.query(n=1)
+			print(sentence)
+			print('Probability: {}'.format(prob))
+		print()		
+
+class ComputePerplexityCB(callbacks.Callback):
+	def on_epoch_end(self, epoch, logs=None):
+		X_dev, y_dev = self.validation_data[:2]
+		print('Perplexity on dev set: {}'.format(utils.perplexity(y_dev, self.model.predict(X_dev))))
 
 dataset = '../data/preprocessed_buzzfeed_dataset.txt'
-word2id, id2word = utils.gen_vocab(dataset)
+word2id, id2word = utils.gen_vocab(dataset, save=True)
 
 tbptt_step = 10
 
@@ -47,7 +71,7 @@ y_train, y_dev = np.split(y, [int(.9*len(y))])
 
 batch_size = 256
 epochs = 40
-test = False
+test = True
 units = 50
 pretrained_emb_file = '../data/glove.6B.50d.txt'
 
@@ -75,19 +99,18 @@ model.summary()
 
 model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['acc']) #, perplexity])
 
-model_name = 'model_GRU.h5'
+model_name = 'test.h5'
 
-if not os.path.isdir('trained_models'):
-	os.makedirs('trained_models')
+if not os.path.isdir('../trained_models'):
+	os.makedirs('../trained_models')
 
 early_stopping_cb = callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=5, mode='auto')
 model_checkpoint_cb = callbacks.ModelCheckpoint('trained_models/{}'.format(model_name), monitor='val_loss', 
 										verbose=0, save_best_only=True, mode='auto')
-# perplexity_cb = utils.ComputePerplexityCB()
-sentence_gen_cb = utils.SentenceGeneratorCB(word2id, id2word, tbptt_step, time_distributed=False)
+# perplexity_cb = ComputePerplexityCB()
+sentence_gen_cb = SentenceGeneratorCB(word2id, id2word, tbptt_step)
 
 history = model.fit(X_train, y_train, batch_size=batch_size, validation_data=(X_dev,y_dev), epochs=epochs, 
 	verbose=1, callbacks=[early_stopping_cb, sentence_gen_cb, model_checkpoint_cb]) # , perplexity_cb])
 
-with open('trained_models/{}.p'.format(os.path.basename(model_name)), 'wb') as hist_dump:
-    pickle.dump(history.history, hist_dump)
+utils.pickle_dump('../trained_models/{}.p'.format(os.path.basename(model_name)), history.history) 
